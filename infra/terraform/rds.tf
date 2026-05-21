@@ -21,7 +21,7 @@ resource "aws_security_group" "rds_sg" {
 }
 
 # Database instance
-resource "aws_db_instance" "postegres" {
+resource "aws_db_instance" "postgres" {
   identifier           = "pitflow-db"
   allocated_storage    = 20
   engine               = "postgres"
