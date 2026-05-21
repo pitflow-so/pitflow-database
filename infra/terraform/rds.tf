@@ -28,7 +28,7 @@ resource "aws_db_instance" "postgres" {
   engine_version       = "16"
   instance_class       = "db.t3.micro"
   db_name              = local.db_credentials.DB_NAME
-  username             = local.db_credentials.DB_USER
+  username             = local.db_credentials.DB_USERNAME
   password             = local.db_credentials.DB_PASSWORD
   parameter_group_name = "default.postgres16"
 
