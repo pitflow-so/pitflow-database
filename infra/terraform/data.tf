@@ -1,4 +1,4 @@
-data "aws_secretmanager_secret" "pitflow" { 
+data "aws_secretmanager_secret" "pitflow" {
   name = var.secret_name
 }
 
