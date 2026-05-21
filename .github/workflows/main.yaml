@@ -1,0 +1,120 @@
+name: Pitflow Database CI/CD
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch: # Habilitar execução manual
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # -------------------------------------------------------------------------
+  # JOB 1: Create RDS Database
+  # -------------------------------------------------------------------------
+  create-database:
+    name: Create RDS Database
+    runs-on: ubuntu-latest
+    outputs:
+      rds_endpoint: ${{ steps.tf-output.outputs.rds_endpoint }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+          
+      - name: Terraform setup
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        working-directory: infra/terraform
+        run: terraform init -input=false
+
+      - name: Terraform Format Check
+        working-directory: infra/terraform
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Validate
+        working-directory: infra/terraform
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: infra/terraform
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Terraform Apply
+        working-directory: infra/terraform
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Capture Outputs
+        id: tf-output
+        working-directory: infra/terraform
+        run: |
+          RDS_ENDPOINT=$(terraform output -raw rds_endpoint)
+          
+          echo "rds_endpoint=$RDS_ENDPOINT" >> $GITHUB_OUTPUT
+          echo "RDS Endpoint: $RDS_ENDPOINT"
+
+  # -------------------------------------------------------------------------
+  # JOB 2: Update DB Host in Secrets Manager
+  # -------------------------------------------------------------------------
+  update-db-host:
+    name: Update DB Host in Secrets Manager
+    needs: create-database
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Validate Secret Existence
+        run: |
+          SECRET_ID="pitflow/bootstrap"
+          
+          echo "Validating secret: $SECRET_ID"
+          
+          if ! aws secretsmanager describe-secret --secret-id "$SECRET_ID" &> /dev/null; then
+            echo "❌ FATAL: Secret '$SECRET_ID' not found in AWS Secrets Manager"
+            exit 1
+          fi
+          
+          echo "✅ Secret exists"
+        
+      - name: Update DB Host in Secrets Manager
+        run: |
+          set -e
+      
+          SECRET_ID="pitflow/bootstrap"
+          NEW_ENDPOINT="${{ needs.create-database.outputs.rds_endpoint }}"
+      
+          echo "Updating DB_HOST..."
+      
+          CURRENT_SECRET=$(aws secretsmanager get-secret-value \
+            --secret-id "$SECRET_ID" \
+            --query 'SecretString' \
+            --output text)
+      
+          UPDATED_SECRET=$(echo "$CURRENT_SECRET" | \
+            jq --arg new_host "$NEW_ENDPOINT" \
+            '.DB_HOST = $new_host')
+      
+          aws secretsmanager update-secret \
+            --secret-id "$SECRET_ID" \
+            --secret-string "$UPDATED_SECRET" > /dev/null
+      
+          echo "✅ Secret updated successfully"
+          echo "New DB_HOST: $NEW_ENDPOINT"
