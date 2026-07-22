@@ -11,9 +11,9 @@ variable "aws_region" {
 }
 
 variable "rds_identifier" {
-  description = "Physical RDS identifier. Keep pitflow-db during migration; change only after the cutover and snapshot."
+  description = "Physical identifier of the shared PostgreSQL RDS instance."
   type        = string
-  default     = "pitflow-db"
+  default     = "pitflow-operation-db"
 }
 
 variable "allowed_postgres_cidr_blocks" {
