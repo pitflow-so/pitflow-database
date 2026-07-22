@@ -31,7 +31,8 @@ resource "aws_db_instance" "postgres" {
   password             = local.rds_master_password
   parameter_group_name = "default.postgres16"
 
-  publicly_accessible    = true # Deixei público para testes com dbeaver
+  # Required by the current GitHub-hosted runner bootstrap. Restrict in production.
+  publicly_accessible    = true
   vpc_security_group_ids = [aws_security_group.rds_sg.id]
   skip_final_snapshot    = true
   deletion_protection    = false

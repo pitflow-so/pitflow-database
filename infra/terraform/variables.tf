@@ -17,7 +17,7 @@ variable "rds_identifier" {
 }
 
 variable "allowed_postgres_cidr_blocks" {
-  description = "CIDR blocks allowed to connect to PostgreSQL. The current public rule is preserved by default to avoid an unplanned outage; restrict it after network discovery."
+  description = "CIDR blocks allowed to connect to PostgreSQL. The lab defaults to public access so the GitHub-hosted runner can execute the bootstrap."
   type        = list(string)
   default     = ["0.0.0.0/0"]
 }
