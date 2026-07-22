@@ -179,7 +179,7 @@ Pré-requisitos:
 - Terraform >= 1.5;
 - AWS CLI com credenciais temporárias válidas;
 - secret `pitflow/bootstrap` existente;
-- backend S3 `tfstate-backend-fiap-pitflow` existente.
+- backend S3 `tfstate-backend-pitflow-bootstrap` existente.
 
 ```bash
 cd infra/terraform
