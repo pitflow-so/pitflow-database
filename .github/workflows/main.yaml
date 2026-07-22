@@ -1,23 +1,35 @@
-name: Pitflow Database CI/CD
+name: Pitflow Database
 
 on:
   push:
     branches: ["main"]
-  workflow_dispatch: # Habilitar execução manual
+    paths:
+      - "infra/terraform/**"
+      - "scripts/**"
+      - ".github/workflows/main.yaml"
+  workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: pitflow-database-${{ github.ref }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TF_VAR_aws_region: "us-east-1"
+  TF_VAR_secret_name: "pitflow/bootstrap"
+
 jobs:
-  # -------------------------------------------------------------------------
-  # JOB 1: Create RDS Database
-  # -------------------------------------------------------------------------
-  create-database:
-    name: Create RDS Database
+  deploy:
+    name: Validate and create database resources
     runs-on: ubuntu-latest
-    outputs:
-      rds_endpoint: ${{ steps.tf-output.outputs.rds_endpoint }}
+    defaults:
+      run:
+        working-directory: infra/terraform
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -28,93 +40,88 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: us-east-1
-          
-      - name: Terraform setup
+          aws-region: ${{ env.TF_VAR_aws_region }}
+
+      - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
 
-      - name: Terraform Init
-        working-directory: infra/terraform
+      - name: Terraform init
         run: terraform init -input=false
 
-      - name: Terraform Format Check
-        working-directory: infra/terraform
+      - name: Terraform format check
         run: terraform fmt -check -recursive
 
-      - name: Terraform Validate
-        working-directory: infra/terraform
+      - name: Terraform validate
         run: terraform validate
 
-      - name: Terraform Plan
-        working-directory: infra/terraform
-        run: terraform plan -input=false -out=tfplan
+      - name: Terraform plan
+        run: terraform plan -input=false -no-color -out=tfplan
 
-      - name: Terraform Apply
-        working-directory: infra/terraform
+      - name: Terraform apply
         run: terraform apply -input=false -auto-approve tfplan
 
-      - name: Capture Outputs
-        id: tf-output
-        working-directory: infra/terraform
+      - name: Capture non-sensitive outputs
+        id: database-outputs
         run: |
-          RDS_ENDPOINT=$(terraform output -raw rds_endpoint)
-          
-          echo "rds_endpoint=$RDS_ENDPOINT" >> $GITHUB_OUTPUT
-          echo "RDS Endpoint: $RDS_ENDPOINT"
+          echo "postgres_host=$(terraform output -raw postgres_host)" >> "$GITHUB_OUTPUT"
+          echo "postgres_port=$(terraform output -raw postgres_port)" >> "$GITHUB_OUTPUT"
+          echo "orchestrator_table_name=$(terraform output -raw orchestrator_table_name)" >> "$GITHUB_OUTPUT"
+          echo "orchestrator_table_region=$(terraform output -raw orchestrator_table_region)" >> "$GITHUB_OUTPUT"
 
-  # -------------------------------------------------------------------------
-  # JOB 2: Update DB Host in Secrets Manager
-  # -------------------------------------------------------------------------
-  update-db-host:
-    name: Update DB Host in Secrets Manager
-    needs: create-database
-    runs-on: ubuntu-latest
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: us-east-1
-
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: Validate Secret Existence
+      - name: Install PostgreSQL client when needed
+        working-directory: .
         run: |
-          SECRET_ID="pitflow/bootstrap"
-          
-          echo "Validating secret: $SECRET_ID"
-          
-          if ! aws secretsmanager describe-secret --secret-id "$SECRET_ID" &> /dev/null; then
-            echo "❌ FATAL: Secret '$SECRET_ID' not found in AWS Secrets Manager"
-            exit 1
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
           fi
-          
-          echo "✅ Secret exists"
-        
-      - name: Update DB Host in Secrets Manager
+
+      - name: Bootstrap logical PostgreSQL databases
+        working-directory: .
+        env:
+          PITFLOW_SECRET_ID: ${{ env.TF_VAR_secret_name }}
+          PITFLOW_POSTGRES_HOST: ${{ steps.database-outputs.outputs.postgres_host }}
+          PITFLOW_POSTGRES_PORT: ${{ steps.database-outputs.outputs.postgres_port }}
+        run: bash scripts/bootstrap-postgres.sh
+
+      - name: Update dynamic database values in Secrets Manager
+        working-directory: .
+        env:
+          PITFLOW_SECRET_ID: ${{ env.TF_VAR_secret_name }}
+          POSTGRES_HOST: ${{ steps.database-outputs.outputs.postgres_host }}
+          POSTGRES_PORT: ${{ steps.database-outputs.outputs.postgres_port }}
+          ORCHESTRATOR_TABLE_NAME: ${{ steps.database-outputs.outputs.orchestrator_table_name }}
+          ORCHESTRATOR_TABLE_REGION: ${{ steps.database-outputs.outputs.orchestrator_table_region }}
         run: |
-          set -e
-      
-          SECRET_ID="pitflow/bootstrap"
-          NEW_ENDPOINT="${{ needs.create-database.outputs.rds_endpoint }}"
-      
-          echo "Updating DB_HOST..."
-      
-          CURRENT_SECRET=$(aws secretsmanager get-secret-value \
-            --secret-id "$SECRET_ID" \
-            --query 'SecretString' \
-            --output text)
-      
-          UPDATED_SECRET=$(echo "$CURRENT_SECRET" | \
-            jq --arg new_host "$NEW_ENDPOINT" \
-            '.DB_HOST = $new_host')
-      
-          aws secretsmanager update-secret \
-            --secret-id "$SECRET_ID" \
-            --secret-string "$UPDATED_SECRET" > /dev/null
-      
-          echo "✅ Secret updated successfully"
-          echo "New DB_HOST: $NEW_ENDPOINT"
+          set -Eeuo pipefail
+          current_secret="$RUNNER_TEMP/pitflow-secret-current.json"
+          updated_secret="$RUNNER_TEMP/pitflow-secret-updated.json"
+          trap 'rm -f "$current_secret" "$updated_secret"' EXIT
+
+          aws secretsmanager get-secret-value \
+            --secret-id "$PITFLOW_SECRET_ID" \
+            --query SecretString \
+            --output text > "$current_secret"
+
+          jq \
+            --arg host "$POSTGRES_HOST" \
+            --arg port "$POSTGRES_PORT" \
+            --arg table "$ORCHESTRATOR_TABLE_NAME" \
+            --arg region "$ORCHESTRATOR_TABLE_REGION" \
+            '.PITFLOW_OPERATION_DB_HOST = $host |
+             .PITFLOW_OPERATION_DB_PORT = $port |
+             .PITFLOW_INVENTORY_DB_HOST = $host |
+             .PITFLOW_INVENTORY_DB_PORT = $port |
+             .PITFLOW_REGISTRY_DB_HOST = $host |
+             .PITFLOW_REGISTRY_DB_PORT = $port |
+             .PITFLOW_PAYMENT_DB_HOST = $host |
+             .PITFLOW_PAYMENT_DB_PORT = $port |
+             .PITFLOW_ORCHESTRATOR_TABLE_NAME = $table |
+             .PITFLOW_ORCHESTRATOR_AWS_REGION = $region' \
+            "$current_secret" > "$updated_secret"
+
+          aws secretsmanager put-secret-value \
+            --secret-id "$PITFLOW_SECRET_ID" \
+            --secret-string "file://$updated_secret" >/dev/null
+
+          echo "Dynamic database configuration updated in Secrets Manager."
