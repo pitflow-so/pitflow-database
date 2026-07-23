@@ -36,4 +36,11 @@ resource "aws_db_instance" "postgres" {
   vpc_security_group_ids = [aws_security_group.rds_sg.id]
   skip_final_snapshot    = true
   deletion_protection    = false
+
+  lifecycle {
+    precondition {
+      condition     = can(regex("^[A-Za-z][A-Za-z0-9]{0,15}$", local.rds_master_username))
+      error_message = "PITFLOW_OPERATION_DB_USERNAME is also the RDS master username and must start with a letter, contain only letters and numbers, and have at most 16 characters. Suggested value: pitflowoperation."
+    }
+  }
 }

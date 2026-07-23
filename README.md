@@ -48,6 +48,14 @@ flowchart TD
 
 O usuário de operation também é o usuário master da instância neste ambiente. O script de bootstrap cria os outros usuários e databases, revoga o acesso público aos quatro databases e concede a cada usuário acesso ao seu próprio database.
 
+Como `PITFLOW_OPERATION_DB_USERNAME` também é o username master do RDS, ele deve começar com uma letra, conter somente letras e números e ter no máximo 16 caracteres. Use, por exemplo:
+
+```text
+PITFLOW_OPERATION_DB_USERNAME=exemplouser
+```
+
+Não use `pitflow_operation` para operation, pois `_` não é aceito no username master do RDS. Os usuários lógicos de inventory, registry e payment podem usar underscore porque são criados diretamente no PostgreSQL.
+
 ### DynamoDB
 
 A tabela do orquestrador usa:
