@@ -16,6 +16,7 @@ output "postgres_instance_identifier" {
 output "postgres_database_names" {
   description = "Logical PostgreSQL database names by microservice."
   value       = local.database_names
+  sensitive   = true
 }
 
 output "orchestrator_table_name" {
