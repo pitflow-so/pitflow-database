@@ -19,6 +19,8 @@ Este é um ambiente acadêmico, descartável e reconstruído com frequência. A 
 3. Executar o `pitflow-bootstrap` para garantir que `pitflow/bootstrap` exista com as credenciais padronizadas.
 4. Confirmar que o bucket S3 do backend e o Terraform state estão acessíveis.
 
+`PITFLOW_OPERATION_DB_USERNAME` também é o username master do RDS. Ele deve começar com uma letra, conter apenas letras e números e ter no máximo 16 caracteres. O valor recomendado é `pitflowoperation`; underscore não é permitido nesse campo.
+
 ## Fluxo do workflow
 
 O workflow é executado em pushes na `main` que alterem a infraestrutura ou manualmente por `workflow_dispatch`. Não possui parâmetros.
@@ -74,5 +76,3 @@ Os quatro bancos PostgreSQL compartilham host e porta, mas possuem nomes, usuár
 - O script PostgreSQL lê credenciais diretamente do Secrets Manager.
 - Nenhuma senha é exposta em outputs Terraform.
 - O arquivo de plano não é publicado como artifact.
-
-O password master necessário pelo recurso RDS continua sendo tratado como atributo sensível pelo provider AWS e pode existir de forma sensível no Terraform state. O state remoto deve permanecer restrito.
